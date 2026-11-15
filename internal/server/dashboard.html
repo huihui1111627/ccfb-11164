@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>注塑车间 SPC 看板</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #0f1420; color: #dde3ee; }
+  header { display: flex; align-items: baseline; gap: 16px; padding: 12px 20px; background: #161d2e; border-bottom: 1px solid #26304a; }
+  header h1 { font-size: 18px; color: #5ec1ff; }
+  #clock { color: #8fa3c8; font-size: 14px; }
+  nav { display: flex; gap: 4px; padding: 8px 20px; background: #131a2a; flex-wrap: wrap; }
+  nav button { background: none; border: 1px solid #2a3550; color: #aab8d8; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  nav button.active { background: #1d3a5f; color: #5ec1ff; border-color: #2f5f9e; }
+  main { padding: 16px 20px; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 10px; }
+  th, td { border: 1px solid #2a3550; padding: 6px 8px; text-align: left; }
+  th { background: #1a2338; color: #8fb8e8; }
+  .ok { color: #4ade80; } .warn { color: #facc15; } .bad { color: #f87171; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; margin-top: 10px; }
+  .card { background: #18203a; border: 1px solid #2a3550; border-radius: 8px; padding: 10px 12px; }
+  .card.alarm { border-color: #e04848; background: #2a1a22; }
+  .card.collecting { border-color: #b58a2a; }
+  .card h3 { font-size: 13px; color: #9fb4d8; margin-bottom: 4px; }
+  .card .v { font-size: 20px; font-weight: 600; }
+  .card .s { font-size: 12px; color: #7d8fb3; margin-top: 4px; }
+  select, input, textarea { background: #10182c; color: #dde3ee; border: 1px solid #2a3550; border-radius: 5px; padding: 5px 8px; font-size: 13px; }
+  button.act { background: #1d3a5f; color: #9fd0ff; border: 1px solid #2f5f9e; border-radius: 5px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
+  button.act:disabled { opacity: .4; cursor: not-allowed; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+  .panel { background: #141b2d; border: 1px solid #26304a; border-radius: 8px; padding: 12px; margin-top: 10px; }
+  canvas { background: #0c1120; border: 1px solid #26304a; border-radius: 6px; width: 100%; }
+  .stat { display: inline-block; background: #18203a; border: 1px solid #2a3550; border-radius: 8px; padding: 10px 18px; margin: 6px 8px 0 0; }
+  .stat .n { font-size: 22px; font-weight: 700; color: #5ec1ff; }
+  .stat .l { font-size: 12px; color: #8fa3c8; }
+  .rule { display: inline-flex; align-items: center; gap: 4px; margin: 3px 10px 3px 0; font-size: 12px; color: #aab8d8; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #26304a; }
+  .tag.open { background: #7a2a2a; } .tag.action { background: #7a5a1a; }
+  .tag.effective { background: #1a5a7a; } .tag.closed { background: #2a5a2a; }
+  h2 { font-size: 16px; color: #9fc8f5; margin-bottom: 6px; }
+  .hint { color: #6f82a8; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>注塑车间 SPC 统计过程控制</h1>
+  <span id="clock">--</span>
+  <span id="quality" class="hint"></span>
+</header>
+<nav id="nav"></nav>
+<main>
+  <div class="tab" id="tab-overview"><h2>机台状态总览</h2><div class="cards" id="ovCards"></div></div>
+
+  <div class="tab" id="tab-chart">
+    <div class="row">
+      <label>特性 <select id="chChar"></select></label>
+      <label>机台 <select id="chMachine"></select></label>
+      <button class="act" id="btnRecalc">换模/换料 重算控制限</button>
+      <span id="chInfo" class="hint"></span>
+    </div>
+    <div class="row" id="ruleToggles"></div>
+    <div class="panel"><canvas id="cvMain" height="260"></canvas></div>
+    <div class="panel"><canvas id="cvDisp" height="140"></canvas></div>
+    <div class="panel"><h2>判异记录</h2><table id="vioTbl"><thead><tr><th>点号</th><th>时间</th><th>准则</th><th>说明</th></tr></thead><tbody></tbody></table></div>
+  </div>
+
+  <div class="tab" id="tab-alarms">
+    <h2>判异报警与异常处理</h2>
+    <div class="row"><label>状态 <select id="alStatus">
+      <option value="">全部</option><option value="open">待处理</option><option value="action">已填措施</option>
+      <option value="effective">措施已生效</option><option value="closed">已关闭</option>
+    </select></label></div>
+    <table id="alTbl"><thead><tr><th>ID</th><th>时间</th><th>特性</th><th>机台</th><th>判异准则</th><th>说明</th><th>状态</th><th>处理措施</th><th>操作</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="tab" id="tab-cap">
+    <div class="row">
+      <label>特性 <select id="capChar"></select></label>
+      <label>分组 <select id="capBy"><option value="batch">按批次</option><option value="shift">按班次</option></select></label>
+    </div>
+    <table id="capTbl"><thead><tr><th>组</th><th>样本数</th><th>均值</th><th>σ组内</th><th>σ总体</th><th>Cp</th><th>Cpk</th><th>Pp</th><th>Ppk</th><th>超规%</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="tab" id="tab-compare">
+    <div class="row"><label>特性 <select id="cmpChar"></select></label></div>
+    <table id="cmpTbl"><thead><tr><th>机台</th><th>子组数</th><th>均值</th><th>标准差</th><th>Cpk</th><th>未关闭报警</th><th>最新值</th><th>时间</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="tab" id="tab-msa">
+    <div class="row"><label>特性 <select id="msaChar"></select></label><button class="act" id="btnMSA">运行 Gage R&R 研究 (10零件×3人×3次)</button></div>
+    <div id="msaOut"></div>
+  </div>
+
+  <div class="tab" id="tab-eval">
+    <h2>仿真评估: 报警及时性与误报率</h2>
+    <div id="evalStats"></div>
+    <table id="evTbl"><thead><tr><th>#</th><th>失控模式</th><th>特性</th><th>机台</th><th>注入起点</th><th>说明</th><th>是否检出</th><th>检出延迟(分钟)</th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
+
+<script>
+const TABS = [["overview","总览"],["chart","控制图"],["alarms","报警处理"],["cap","过程能力"],["compare","多机对比"],["msa","MSA"],["eval","仿真评估"]];
+const RULE_NAMES = ["","1 单点超3σ","2 9点同侧","3 6点单调","4 14点交替","5 3中2超2σ","6 5中4超1σ","7 15点±1σ内","8 8点±1σ外"];
+let chars = [], machines = [], curTab = "overview";
+
+const $ = s => document.querySelector(s);
+const fmt = (v, d=4) => (v === undefined || v === null || Number.isNaN(v)) ? "-" : Number(v).toFixed(d);
+const fmtT = t => t ? new Date(t).toLocaleString("zh-CN", {hour12:false}) : "-";
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) { const e = await r.json().catch(()=>({error:r.statusText})); throw new Error(e.error); }
+  return r.json();
+}
+async function post(path, body) {
+  return api(path, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+}
+
+// nav
+const nav = $("#nav");
+TABS.forEach(([id, name]) => {
+  const b = document.createElement("button");
+  b.textContent = name; b.dataset.tab = id;
+  b.onclick = () => { curTab = id; document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("active", x===b));
+    document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active", t.id==="tab-"+id)); refresh(); };
+  nav.appendChild(b);
+});
+nav.firstChild.classList.add("active"); $("#tab-overview").classList.add("active");
+
+async function init() {
+  [chars, machines] = await Promise.all([api("/api/characteristics"), api("/api/machines")]);
+  for (const sel of ["#chChar","#capChar","#cmpChar","#msaChar"]) {
+    const el = $(sel);
+    chars.forEach(c => { const o = document.createElement("option"); o.value = c.id;
+      o.textContent = `${c.name} (${c.chart})`; if (sel==="#msaChar" && c.chart==="p") o.disabled = true; el.appendChild(o); });
+  }
+  const msel = $("#chMachine");
+  machines.forEach(m => { const o = document.createElement("option"); o.value = m.id; o.textContent = m.name; msel.appendChild(o); });
+  $("#chChar").onchange = renderChart; $("#chMachine").onchange = renderChart;
+  $("#capChar").onchange = renderCap; $("#capBy").onchange = renderCap;
+  $("#cmpChar").onchange = renderCompare;
+  $("#alStatus").onchange = renderAlarms;
+  $("#btnRecalc").onclick = async () => {
+    const reason = prompt("重算原因:", "换模"); if (!reason) return;
+    await post("/api/recalc", {charId: $("#chChar").value, machineId: $("#chMachine").value, reason});
+    renderChart();
+  };
+  $("#btnMSA").onclick = renderMSA;
+  refresh();
+  setInterval(refresh, 3000);
+}
+
+function refresh() {
+  api("/api/time").then(t => $("#clock").textContent = "模拟时间 " + t.simTime);
+  api("/api/quality").then(q => $("#quality").textContent =
+    `数据质量: 接收${q.received} 缺失过滤${q.missing} 单位错误纠正${q.unitCorrected} 异常值丢弃${q.outlierDropped}`);
+  ({overview: renderOverview, chart: renderChart, alarms: renderAlarms, cap: renderCap,
+    compare: renderCompare, eval: renderEval}[curTab] || (()=>{}))();
+}
+
+async function renderOverview() {
+  const items = await api("/api/overview");
+  const el = $("#ovCards"); el.innerHTML = "";
+  items.forEach(it => {
+    const d = document.createElement("div");
+    d.className = "card " + (it.status === "alarm" ? "alarm" : it.status === "collecting" ? "collecting" : "");
+    const st = it.status === "alarm" ? `<span class="bad">报警×${it.openAlarms}</span>`
+      : it.status === "collecting" ? `<span class="warn">稳定期数据收集中</span>` : `<span class="ok">受控</span>`;
+    d.innerHTML = `<h3>${it.charName} · ${it.machineId}</h3>
+      <div class="v">${fmt(it.lastValue)}</div>
+      <div class="s">${st} &nbsp; Cpk≈${it.cpk ? fmt(it.cpk,2) : "-"}<br>${fmtT(it.lastTime)}</div>`;
+    el.appendChild(d);
+  });
+}
+
+function drawChart(cv, pts, getV, cl, ucl, lcl, violIdx, label) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.height;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr);
+  ctx.font = "11px sans-serif";
+  if (!pts.length) { ctx.fillStyle = "#7d8fb3"; ctx.fillText("暂无数据", 20, 30); return; }
+  const vals = pts.map(getV);
+  let lo = Math.min(...vals, lcl ?? Infinity), hi = Math.max(...vals, ucl ?? -Infinity);
+  const pad = (hi - lo || 1) * 0.15; lo -= pad; hi += pad;
+  const L = 60, R = 16, T = 18, B = 22;
+  const x = i => L + (W - L - R) * (pts.length === 1 ? 0.5 : i / (pts.length - 1));
+  const y = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
+  ctx.strokeStyle = "#26304a"; ctx.strokeRect(L, T, W - L - R, H - T - B);
+  const line = (v, color, dash, name) => {
+    if (v === undefined || v === null) return;
+    ctx.strokeStyle = color; ctx.setLineDash(dash); ctx.beginPath();
+    ctx.moveTo(L, y(v)); ctx.lineTo(W - R, y(v)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = color; ctx.fillText(`${name} ${fmt(v)}`, 4, y(v) + 3);
+  };
+  line(ucl, "#e04848", [5,4], "UCL"); line(lcl, "#e04848", [5,4], "LCL"); line(cl, "#3fae5a", [], "CL");
+  if (ucl !== undefined && cl !== undefined) {
+    const s = (ucl - cl) / 3;
+    line(cl + s, "#3a4a6a", [2,4], "+1σ"); line(cl + 2*s, "#3a4a6a", [2,4], "+2σ");
+    line(cl - s, "#3a4a6a", [2,4], "-1σ"); line(cl - 2*s, "#3a4a6a", [2,4], "-2σ");
+  }
+  ctx.strokeStyle = "#4a8fd4"; ctx.beginPath();
+  pts.forEach((p, i) => { const v = getV(p); i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)); });
+  ctx.stroke();
+  const vset = new Set(violIdx || []);
+  pts.forEach((p, i) => {
+    const v = getV(p);
+    ctx.fillStyle = vset.has(p.index) ? "#ff5252" : "#7db8f0";
+    ctx.beginPath(); ctx.arc(x(i), y(v), vset.has(p.index) ? 4 : 2.5, 0, 7); ctx.fill();
+  });
+  ctx.fillStyle = "#8fa3c8"; ctx.fillText(label, L + 6, T + 12);
+  ctx.fillText("#" + pts[0].index, L, H - 6);
+  ctx.fillText("#" + pts[pts.length-1].index, W - R - 30, H - 6);
+}
+
+async function renderChart() {
+  const charId = $("#chChar").value, machineId = $("#chMachine").value;
+  const c = chars.find(x => x.id === charId);
+  const d = await api(`/api/chart?char=${charId}&machine=${machineId}&last=120`);
+  const lim = d.limits;
+  $("#chInfo").textContent = lim.active
+    ? `控制限(${lim.reason}, n=${lim.samples}): CL=${fmt(lim.cl)} UCL=${fmt(lim.ucl)} LCL=${fmt(lim.lcl)} σ=${fmt(lim.sigma)}`
+    : `稳定期数据收集中…(${d.points.length}/${d.need || 25}个子组后计算控制限)`;
+  const violIdx = (d.violations || []).map(v => v.index);
+  drawChart($("#cvMain"), d.points, p => p.value, lim.active ? lim.cl : undefined,
+    lim.active ? lim.ucl : undefined, lim.active ? lim.lcl : undefined, violIdx,
+    `${c.name} 主图 (${c.chart})`);
+  const dispCv = $("#cvDisp");
+  if (c.chart === "p") { dispCv.getContext("2d").clearRect(0,0,dispCv.width,dispCv.height); dispCv.height = 30; }
+  else {
+    dispCv.height = 140;
+    drawChart(dispCv, d.points.filter(p => p.dispersion > 0 || p.index > 1), p => p.dispersion,
+      lim.active ? lim.dcl : undefined, lim.active ? lim.ducl : undefined, lim.active ? lim.dlcl : undefined, violIdx,
+      "离散图 (R/S/MR)");
+  }
+  // 判异记录
+  const tb = $("#vioTbl tbody"); tb.innerHTML = "";
+  (d.violations || []).slice(-30).reverse().forEach(v => {
+    tb.insertAdjacentHTML("beforeend", `<tr><td>${v.index}</td><td>${fmtT(v.time)}</td><td class="bad">${RULE_NAMES[v.rule]}</td><td>${v.detail}</td></tr>`);
+  });
+  // 准则开关
+  const rt = $("#ruleToggles"); rt.innerHTML = "";
+  c.rules.forEach((on, i) => {
+    const id = `rule${i}`;
+    rt.insertAdjacentHTML("beforeend",
+      `<label class="rule"><input type="checkbox" id="${id}" ${on?"checked":""}> ${RULE_NAMES[i+1]}</label>`);
+    rt.querySelector("#"+id).onchange = async ev => {
+      c.rules[i] = ev.target.checked;
+      await post("/api/rules", {charId: c.id, rules: c.rules});
+    };
+  });
+}
+
+const AL_STATUS = {open:"待处理", action:"已填措施", effective:"措施已生效", closed:"已关闭"};
+async function renderAlarms() {
+  const st = $("#alStatus").value;
+  const alarms = await api("/api/alarms" + (st ? "?status=" + st : ""));
+  const tb = $("#alTbl tbody"); tb.innerHTML = "";
+  alarms.forEach(a => {
+    const cname = (chars.find(c => c.id === a.charId) || {}).name || a.charId;
+    let actionCell = "-", opCell = "-";
+    if (a.status === "open") {
+      actionCell = `<input id="act${a.id}" placeholder="处理措施" size="18"> <input id="by${a.id}" placeholder="操作工" size="6">`;
+      opCell = `<button class="act" onclick="submitAction(${a.id})">提交措施</button>`;
+    } else {
+      actionCell = `${a.action || "-"} (${a.actionBy || "-"})`;
+      if (a.status === "action") opCell = `<span class="warn">验证中 ${a.goodCount}/5</span>`;
+      if (a.status === "effective") opCell = `<button class="act" onclick="closeAlarm(${a.id})">关闭</button>`;
+      if (a.status === "closed") opCell = `<span class="ok">已关闭</span>`;
+    }
+    tb.insertAdjacentHTML("beforeend", `<tr>
+      <td>${a.id}</td><td>${fmtT(a.time)}</td><td>${cname}</td><td>${a.machineId}</td>
+      <td>${a.ruleName}</td><td>${a.detail}</td>
+      <td><span class="tag ${a.status}">${AL_STATUS[a.status]}</span></td>
+      <td>${actionCell}</td><td>${opCell}</td></tr>`);
+  });
+}
+window.submitAction = async id => {
+  const action = $("#act"+id).value.trim(), by = $("#by"+id).value.trim() || "操作工";
+  if (!action) { alert("请填写处理措施"); return; }
+  try { await post("/api/alarms/action", {id, action, by}); renderAlarms(); }
+  catch (e) { alert(e.message); }
+};
+window.closeAlarm = async id => {
+  try { await post("/api/alarms/close", {id}); renderAlarms(); }
+  catch (e) { alert(e.message); }
+};
+
+async function renderCap() {
+  const data = await api(`/api/capability?char=${$("#capChar").value}&by=${$("#capBy").value}`);
+  const tb = $("#capTbl tbody"); tb.innerHTML = "";
+  Object.keys(data).sort().forEach(k => {
+    const c = data[k];
+    const cls = v => v >= 1.33 ? "ok" : v >= 1.0 ? "warn" : "bad";
+    tb.insertAdjacentHTML("beforeend", `<tr><td>${k}</td><td>${c.n}</td><td>${fmt(c.mean)}</td>
+      <td>${fmt(c.stdWithin)}</td><td>${fmt(c.stdOverall)}</td>
+      <td class="${cls(c.cp)}">${fmt(c.cp,2)}</td><td class="${cls(c.cpk)}">${fmt(c.cpk,2)}</td>
+      <td class="${cls(c.pp)}">${fmt(c.pp,2)}</td><td class="${cls(c.ppk)}">${fmt(c.ppk,2)}</td>
+      <td>${fmt(c.outOfSpecPct,2)}</td></tr>`);
+  });
+}
+
+async function renderCompare() {
+  const rows = await api("/api/compare?char=" + $("#cmpChar").value);
+  const tb = $("#cmpTbl tbody"); tb.innerHTML = "";
+  rows.forEach(r => {
+    tb.insertAdjacentHTML("beforeend", `<tr><td>${r.machineId}</td><td>${r.n}</td>
+      <td>${fmt(r.mean)}</td><td>${fmt(r.std)}</td>
+      <td class="${r.cpk>=1.33?"ok":r.cpk>=1?"warn":"bad"}">${r.cpk?fmt(r.cpk,2):"-"}</td>
+      <td>${r.openAlarms ? `<span class="bad">${r.openAlarms}</span>` : "0"}</td>
+      <td>${fmt(r.lastValue)}</td><td>${fmtT(r.lastTime)}</td></tr>`);
+  });
+}
+
+async function renderMSA() {
+  const r = await api("/api/msa?char=" + $("#msaChar").value);
+  $("#msaOut").innerHTML = `<div class="panel"><h2>Gage R&R 结果(均值极差法)</h2>
+    <span class="stat"><div class="n">${fmt(r.pctGRR,1)}%</div><div class="l">%GRR</div></span>
+    <span class="stat"><div class="n">${fmt(r.pctEV,1)}%</div><div class="l">%EV 重复性</div></span>
+    <span class="stat"><div class="n">${fmt(r.pctAV,1)}%</div><div class="l">%AV 再现性</div></span>
+    <span class="stat"><div class="n">${fmt(r.pctPV,1)}%</div><div class="l">%PV 零件变差</div></span>
+    <span class="stat"><div class="n">${r.ndc}</div><div class="l">ndc 可区分类别数</div></span>
+    <span class="stat"><div class="n ${r.pctGRR<10?"ok":r.pctGRR<30?"warn":"bad"}" style="font-size:16px">${r.acceptable}</div><div class="l">判定</div></span>
+    <table><thead><tr><th>变差来源</th><th>研究变差(6σ)</th><th>占总变差%</th></tr></thead><tbody>
+    <tr><td>重复性 EV</td><td>${fmt(r.ev)}</td><td>${fmt(r.pctEV,1)}%</td></tr>
+    <tr><td>再现性 AV</td><td>${fmt(r.av)}</td><td>${fmt(r.pctAV,1)}%</td></tr>
+    <tr><td>量具 R&R</td><td>${fmt(r.grr)}</td><td>${fmt(r.pctGRR,1)}%</td></tr>
+    <tr><td>零件变差 PV</td><td>${fmt(r.pv)}</td><td>${fmt(r.pctPV,1)}%</td></tr>
+    <tr><td>总变差 TV</td><td>${fmt(r.tv)}</td><td>100%</td></tr></tbody></table></div>`;
+}
+
+async function renderEval() {
+  const r = await api("/api/eval");
+  $("#evalStats").innerHTML = `
+    <span class="stat"><div class="n">${r.detected}/${r.eventTotal}</div><div class="l">失控事件检出</div></span>
+    <span class="stat"><div class="n">${fmt(r.avgDelayMinutes,1)} min</div><div class="l">平均检出延迟</div></span>
+    <span class="stat"><div class="n">${r.totalAlarms}</div><div class="l">报警总数</div></span>
+    <span class="stat"><div class="n">${r.falseAlarms}</div><div class="l">误报数</div></span>
+    <span class="stat"><div class="n">${fmt(r.falseAlarmRatePer100,3)}</div><div class="l">误报率(每100稳定子组)</div></span>`;
+  const tb = $("#evTbl tbody"); tb.innerHTML = "";
+  r.events.forEach(e => {
+    const det = !e.expectAlarm ? '<span class="hint">过程搬迁(预期不报警)</span>'
+      : e.detected ? '<span class="ok">已检出</span>' : '<span class="warn">未检出</span>';
+    tb.insertAdjacentHTML("beforeend", `<tr><td>${e.id}</td><td>${e.type}</td><td>${e.charId}</td><td>${e.machineId}</td>
+      <td>${fmtT(e.start)}</td><td>${e.desc}</td>
+      <td>${det}</td>
+      <td>${e.detected ? fmt(e.delayMinutes,1) : "-"}</td></tr>`);
+  });
+}
+
+init();
+</script>
+</body>
+</html>
